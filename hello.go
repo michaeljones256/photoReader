@@ -3,18 +3,25 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
-func recurseDirectories(photoPaths *[]string, directory string) {
+var m sync.Mutex
+
+func recurseDirectories(wg *sync.WaitGroup, photoPaths *[]string, directory string) {
+	defer wg.Done()
 	items, _ := os.ReadDir(directory)
 	for _, item := range items {
 		if item.IsDir() {
 			fmt.Println(item.Name())
-			recurseDirectories(photoPaths, directory+"/"+item.Name())
+			wg.Add(1)
+			go recurseDirectories(wg, photoPaths, directory+"/"+item.Name())
 		} else {
 			// handle file there
+			m.Lock()
 			*photoPaths = append(*photoPaths, directory+"/"+item.Name())
+			m.Unlock()
 		}
 	}
 }
@@ -24,29 +31,14 @@ func main() {
 	fmt.Printf("Type of Args = %T\n", args)
 	fmt.Println(args[0], args[1])
 	path := args[1]
-	// items, _ := ioutil.ReadDir(path)
-	// for _, item := range items {
-	//     if item.IsDir() {
-	//         subitems, _ := ioutil.ReadDir(path+"/"+item.Name())
-	//         for _, subitem := range subitems {
-	//             fmt.Println("here3")
-	//             if !subitem.IsDir() {
-	//                 // file
-	//                 fmt.Println(item.Name() + "/" + subitem.Name())
-	//             }else{
-	//                 //dir
-	// 			}
-	//         }
-	//     } else {
-	//         // handle file there
-	//         fmt.Println(item.Name())
-	//     }
-	// }
 
 	stringSlice := make([]string, 0) // make creates slices
-	start := time.Now()
-	recurseDirectories(&stringSlice, path)
-	fmt.Println(time.Since(start))
 
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	start := time.Now()
+	recurseDirectories(wg, &stringSlice, path)
+	wg.Wait()
+	fmt.Println(time.Since(start))
 	fmt.Println(len(stringSlice))
 }
