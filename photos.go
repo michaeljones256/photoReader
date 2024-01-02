@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -13,6 +14,89 @@ import (
 var m sync.Mutex
 var m1 sync.Mutex
 
+type PhotoFile struct {
+	Path string
+}
+
+type PhotoList struct {
+	Photos *[]string
+}
+
+func regexMatchJPG(file string) bool {
+
+	pattern := `.*\.(JPG|ARW)$`
+	regexpPattern := regexp.MustCompile(pattern)
+	if regexpPattern.MatchString(file) {
+		return true
+	} else {
+		return false
+	}
+}
+func findPhotosSingleThread(path string) {
+	photoPaths := make([]string, 0)
+	start := time.Now()
+	recurseDirectories(&photoPaths, path)
+	singleThreadTime := time.Since(start).String()
+	fmt.Println("Single thread time " + singleThreadTime)
+	fmt.Println("Number of files " + strconv.Itoa(len(photoPaths)))
+}
+
+func findPhotosMulitThread(path string) {
+	photoPaths := make([]string, 0)
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	start := time.Now()
+	recurseDirectoriesMultiThread(wg, &photoPaths, path)
+	wg.Wait()
+	multiTheadTime := time.Since(start).String()
+	fmt.Println("Mulit thread time " + multiTheadTime)
+	fmt.Println("Number of files " + strconv.Itoa(len(photoPaths)))
+}
+func findPhotosMulitThreadChannel(path string) {
+	results := make(chan PhotoFile)
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	start := time.Now()
+	recurseDirectoriesMultiThreadChannel(wg, results, path)
+
+	photoPaths := make([]string, 0)
+	go func() {
+		wg.Wait()
+		close(results)
+		fmt.Println("Multi thread channel time: " + time.Since(start).String())
+		fmt.Println("Number of files " + strconv.Itoa(len(photoPaths)))
+	}()
+	// receive results - waits until results closes
+	for i := range results {
+		photoPaths = append(photoPaths, i.Path)
+	}
+}
+func findPhotosWorkerPool(path string, workers int) {
+	directoryJobs := make(chan string)
+	results := make(chan PhotoList)
+	start := time.Now()
+	go createWorkers(workers, directoryJobs, results)
+	go createJobs(path, directoryJobs)
+	photoPaths := make([]string, 0)
+	// receive results - waits until results closes
+	for i := range results {
+		photoPaths = append(photoPaths, *i.Photos...)
+	}
+	fmt.Println("Multi worker time: " + time.Since(start).String())
+	fmt.Println("Number of files " + strconv.Itoa(len(photoPaths)))
+}
+func recurseDirectories(photoPaths *[]string, directory string) {
+	if regexMatchJPG(directory) {
+		*photoPaths = append(*photoPaths, directory)
+	} else {
+		items, _ := os.ReadDir(directory)
+		for _, item := range items {
+			recurseDirectories(photoPaths, directory+"/"+item.Name())
+		}
+	}
+
+}
+
 func recurseDirectoriesMultiThread(wg *sync.WaitGroup, photoPaths *[]string, directory string) {
 	defer wg.Done()
 	items, _ := os.ReadDir(directory)
@@ -22,23 +106,15 @@ func recurseDirectoriesMultiThread(wg *sync.WaitGroup, photoPaths *[]string, dir
 			go recurseDirectoriesMultiThread(wg, photoPaths, directory+"/"+item.Name())
 		} else {
 			// handle file
-			m.Lock()
-			*photoPaths = append(*photoPaths, directory+"/"+item.Name())
-			m.Unlock()
+			if regexMatchJPG(item.Name()) {
+				m.Lock()
+				*photoPaths = append(*photoPaths, directory+"/"+item.Name())
+				m.Unlock()
+			}
 		}
 	}
 }
-func recurseDirectories(photoPaths *[]string, directory string) {
-	items, _ := os.ReadDir(directory)
-	for _, item := range items {
-		if item.IsDir() {
-			recurseDirectories(photoPaths, directory+"/"+item.Name())
-		} else {
-			// handle file
-			*photoPaths = append(*photoPaths, directory+"/"+item.Name())
-		}
-	}
-}
+
 func recurseDirectoriesMultiThreadChannel(wg *sync.WaitGroup, result chan PhotoFile, directory string) {
 	defer wg.Done()
 	items, _ := os.ReadDir(directory)
@@ -48,16 +124,56 @@ func recurseDirectoriesMultiThreadChannel(wg *sync.WaitGroup, result chan PhotoF
 			go recurseDirectoriesMultiThreadChannel(wg, result, directory+"/"+item.Name())
 		} else {
 			// handle file
-			result <- PhotoFile{Path: directory + "/" + item.Name()}
+			if regexMatchJPG(item.Name()) {
+				result <- PhotoFile{Path: directory + "/" + item.Name()}
+			}
 		}
 	}
 }
-func reciever(photoPaths *[]string, results chan PhotoFile) {
-	for i := range results {
-		// m1.Lock()
-		*photoPaths = append(*photoPaths, i.Path)
-		// m1.Unlock()
+func recurseDirectoriesOld(photoPaths *[]string, directory string) {
+	items, _ := os.ReadDir(directory)
+	for _, item := range items {
+		if item.IsDir() {
+			recurseDirectoriesOld(photoPaths, directory+"/"+item.Name())
+		} else {
+			// handle file
+			if regexMatchJPG(item.Name()) {
+				*photoPaths = append(*photoPaths, directory+"/"+item.Name())
+			}
+		}
 	}
+}
+
+func findFilesJob(directoryJobs <-chan string, results chan PhotoList, wg *sync.WaitGroup, workerId int) {
+	defer wg.Done()
+	for directory := range directoryJobs {
+		photoPaths2 := make([]string, 0)
+		// fmt.Println("worker: " + strconv.Itoa(workerId) + " doing job " + directory)
+		recurseDirectories(&photoPaths2, directory)
+		results <- PhotoList{Photos: &photoPaths2}
+	}
+}
+func createJobs(intialPath string, directoryJobs chan string) {
+	items, _ := os.ReadDir(intialPath)
+	for _, item := range items {
+		if item.IsDir() {
+			directoryJobs <- intialPath + item.Name()
+		} else {
+			directoryJobs <- intialPath + "/" + item.Name()
+		}
+	}
+	close(directoryJobs)
+}
+
+func createWorkers(numWorkers int, directoryJobs chan string, results chan PhotoList) {
+	wg := new(sync.WaitGroup)
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go findFilesJob(directoryJobs, results, wg, w)
+	}
+	wg.Wait()
+	close(results)
+
 }
 
 func main() {
@@ -66,41 +182,14 @@ func main() {
 	if err != nil {
 		fmt.Println("Error loading .env file: ", err)
 	}
-	path := os.Getenv("PATH_FILES")
-	fmt.Println(path)
+	path := os.Getenv("PHOTOS_PATH")
 
-	//-----------mutli thread no channel-----------
-	stringSlice2 := make([]string, 0) // slice
-	wg := new(sync.WaitGroup)
-	wg.Add(1)
-	start := time.Now()
-	recurseDirectoriesMultiThread(wg, &stringSlice2, path)
-	wg.Wait()
-	multiTheadTime := time.Since(start).String()
-	fmt.Println("Mulit thread time " + multiTheadTime)
-	fmt.Println("Number of files " + strconv.Itoa(len(stringSlice2)))
+	findPhotosSingleThread(path)
 
-	//-----------single thread recursive-----------
-	stringSlice1 := make([]string, 0) // slice
-	start = time.Now()
-	recurseDirectories(&stringSlice1, path)
-	singleThreadTime := time.Since(start).String()
-	fmt.Println("Single thread time " + singleThreadTime)
-	fmt.Println("Number of files " + strconv.Itoa(len(stringSlice1)))
+	findPhotosMulitThread(path)
 
-	//-----------mulit thread recieving channel-----------
-	result := make(chan PhotoFile)
-	wg.Add(1)
-	start = time.Now()
-	recurseDirectoriesMultiThreadChannel(wg, result, path)
+	findPhotosMulitThreadChannel(path)
 
-	stringSlice := make([]string, 0)
-	go func() {
-		wg.Wait()
-		close(result)
-		fmt.Println("Multi thread channel time: " + time.Since(start).String())
-		fmt.Println("Number of files " + strconv.Itoa(len(stringSlice)))
-	}()
-	reciever(&stringSlice, result)
-
+	workers := 3
+	findPhotosWorkerPool(path, workers)
 }
