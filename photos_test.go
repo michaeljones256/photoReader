@@ -13,7 +13,7 @@ func BenchmarkSingleThreadRecursive(b *testing.B) {
 	if err != nil {
 		fmt.Println("Error loading .env file: ", err)
 	}
-	path := os.Getenv("PATH_FILES")
+	path := os.Getenv("PHOTOS_PATH")
 
 	for i := 0; i < b.N; i++ {
 		findPhotosSingleThread(path)
@@ -25,7 +25,7 @@ func BenchmarkMultiThreadRecursive(b *testing.B) {
 	if err != nil {
 		fmt.Println("Error loading .env file: ", err)
 	}
-	path := os.Getenv("PATH_FILES")
+	path := os.Getenv("PHOTOS_PATH")
 
 	for i := 0; i < b.N; i++ {
 		findPhotosMulitThread(path)
@@ -37,7 +37,7 @@ func BenchmarkMulitThreadReceivingChannel(b *testing.B) {
 	if err != nil {
 		fmt.Println("Error loading .env file: ", err)
 	}
-	path := os.Getenv("PATH_FILES")
+	path := os.Getenv("PHOTOS_PATH")
 
 	for i := 0; i < b.N; i++ {
 		findPhotosMulitThreadChannel(path)
@@ -49,9 +49,9 @@ func BenchmarkRecursiveWorkerPool(b *testing.B) {
 	if err != nil {
 		fmt.Println("Error loading .env file: ", err)
 	}
-	path := os.Getenv("PATH_FILES")
+	path := os.Getenv("PHOTOS_PATH")
 
 	for i := 0; i < b.N; i++ {
-		findPhotosWorkerPool(path, 3)
+		findPhotosWorkerPool(path, 9)
 	}
 }
